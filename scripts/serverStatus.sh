@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/bash
 # check if server port is ready
 g_port_status=$(netstat -tulpen | grep 3000)
 p_port_status=$(netstat -tulpen | grep 9090)
@@ -46,6 +46,7 @@ elif [ $g_portReady == "true" ]&&[ $g_pidReady == "true" ]
 then
     exit 1
 elif [ $p_portReady == "true" ]&&[ $p_pidReady == "true" ]
+then
     exit 2
 else
     exit 3
