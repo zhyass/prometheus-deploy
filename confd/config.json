@@ -1,0 +1,142 @@
+{
+    "type": "array",
+    "properties": [
+        {
+            "key": "cluster",
+            "description": "",
+            "type": "array",
+            "properties": [
+                {
+                    "key": "name",
+                    "label": "Name",
+                    "description": "",
+                    "type": "string",
+                    "default": "Grafana Service",
+                    "required": "no"
+                },
+                {
+                    "key": "description",
+                    "label": "Description",
+                    "description": "",
+                    "type": "string",
+                    "default": "",
+                    "required": "no"
+                },
+                {
+                    "key": "vxnet",
+                    "label": "vxnet",
+                    "description": "Choose a vxnet to join",
+                    "type": "string",
+                    "default": "",
+                    "required": "yes"
+                },
+                {
+                    "key": "grafana_node",
+                    "label": "Grafana Node",
+                    "description": "",
+                    "type": "array",
+                    "properties": [
+                        {
+                            "key": "cpu",
+                            "label": "CPU",
+                            "description": "CPUs core number",
+                            "type": "integer",
+                            "default": 1,
+                            "range": [
+                                1,
+                                2,
+                                4,
+                                8,
+                                16
+                            ],
+                            "required": "yes"
+                        },
+                        {
+                            "key": "memory",
+                            "label": "Memory",
+                            "description": "Memory size",
+                            "type": "integer",
+                            "default": 2048,
+                            "range": [
+                                2048,
+                                4096,
+                                8192,
+                                16384,
+                                24576
+                            ],
+                            "required": "yes"
+                        },
+                        {
+                            "key": "instance_class",
+                            "label": "Instance Class",
+                            "description": "",
+                            "type": "integer",
+                            "default": 0,
+                            "range": [
+                                0,
+                                1
+                            ],
+                            "required": "yes"
+                        },
+                        {
+                            "key": "volume_size",
+                            "label": "Volume size",
+                            "description": "",
+                            "type": "integer",
+                            "min": 5,
+                            "max": 50,
+                            "step": 5,
+                            "default": 10,
+                            "required": "yes"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "key": "service_params",
+            "description": "Custom service configuration properties",
+            "type": "array",
+            "properties": [
+                {
+                    "key": "job_name",
+                    "label": "JobName",
+                    "description": "Add job name into prometheus.yml, for example: radon",
+                    "type": "string",
+                    "required": "yes"
+                },
+                {
+                    "key": "targets",
+                    "label": "Targets",
+                    "description": "Add targets into prometheus.yml, for example: 127.0.0.1:13308",
+                    "type": "string",
+                    "required": "yes"
+                },
+                {
+                    "key": "oldpasswd",
+                    "label": "oldPassword",
+                    "description": "Grafana's admin password.",
+                    "type": "password",
+                    "default": "",
+                    "required": "yes"
+                },
+                {
+                    "key": "newpasswd",
+                    "label": "newPassword",
+                    "description": "",
+                    "type": "password",
+                    "default": "",
+                    "required": "yes"
+                },
+                {
+                    "key": "confirmnew",
+                    "label": "confirmNew",
+                    "description": "",
+                    "type": "password",
+                    "default": "",
+                    "required": "yes"
+                }
+            ]
+        }
+    ]
+}
