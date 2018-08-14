@@ -37,6 +37,17 @@
                     "type": "array",
                     "properties": [
                         {
+                            "key": "count",
+                            "label": "Node Count",
+                            "description": "Number of nodes for the cluster to create",
+                            "type": "integer",
+                            "default": 1,
+                            "range": [
+                                1
+                            ],
+                            "required": "yes"
+                        },
+                        {
                             "key": "cpu",
                             "label": "CPU",
                             "description": "CPUs core number",
@@ -83,11 +94,11 @@
                             "label": "Volume size",
                             "description": "",
                             "type": "integer",
-                            "min": 5,
-                            "max": 50,
-                            "step": 5,
-                            "default": 10,
-                            "required": "yes"
+                            "min": 10,
+                            "max": 1000,
+                            "step": 10,
+                            "default": 20,
+                            "required": "no"
                         }
                     ]
                 }
@@ -106,10 +117,20 @@
                     "required": "yes"
                 },
                 {
-                    "key": "targets",
-                    "label": "Targets",
-                    "description": "Add targets into prometheus.yml, for example: 127.0.0.1:13308",
+                    "key": "ip",
+                    "label": "IP",
+                    "description": "Add targets into prometheus.yml, for example: 127.0.0.1",
                     "type": "string",
+                    "pattern": "^((25[0-5]|2[0-4]\\d|[1]{1}\\d{1}\\d{1}|[1-9]{1}\\d{1}|\\d{1})($|(?!\\.$)\\.)){4}$",
+                    "required": "yes"
+                },
+                {
+                    "key": "port",
+                    "label": "Port",
+                    "description": "Add targets into prometheus.yml, for example: 13308",
+                    "type": "integer",
+                    "max": 65535,
+                    "default": 13308,
                     "required": "yes"
                 },
                 {

@@ -6,7 +6,7 @@
         "dashboards": {
             "cmd": "/etc/init.d/grafana-service dashboards",
             "timeout": 10,
-            "description": "Grafana's dashboards template. Download by wget ftp://ip/filename.json"
+            "description": "Grafana's dashboards template. Download by wget ftp://ip/file"
         },
         "job_list": {
             "cmd": "/etc/init.d/grafana-service displayjobs",
@@ -20,8 +20,9 @@
             "container": {
                 "type": "lxc",
                 "zone": "gd2a",
-                "image": "img-e8aru6d8"
+                "image": "img-ejwiduab"
             },
+            "count": {{cluster.grafana_node.count}},
             "instance_class": {{cluster.grafana_node.instance_class}},
             "cpu": {{cluster.grafana_node.cpu}},
             "memory": {{cluster.grafana_node.memory}},
@@ -34,29 +35,29 @@
             "vertical_scaling_policy": "sequential",
             "services": {
                 "start": {
-                    "cmd": "service prometheus start; service grafana-server start"
+                    "cmd": "/etc/init.d/grafana-service start"
                 },
                 "restart": {
-                   "cmd": "service prometheus restart; service grafana-server restart"
+                   "cmd": "/etc/init.d/grafana-service restart"
                 },
                 "stop": {
-                    "cmd": "service prometheus stop; service grafana-server stop"
-                },
-                "reset_admin":{
-                    "type": "custom",
-                    "cmd": "/etc/init.d/rafana-service reset",
-                    "timeout": 60
+                    "cmd": "/etc/init.d/grafana-service stop"
                 },
                 "modify_user":
                 {
                     "type": "custom",
                     "cmd": "/etc/init.d/grafana-service modifyuser",
-                    "timeout": 600,
+                    "timeout": 60,
                     "service_params": {
                         "oldpasswd": {{service_params.oldpasswd}},
                         "newpasswd": {{service_params.newpasswd}},
                         "confirmnew": {{service_params.confirmnew}}
                     }
+                },
+                "reset_admin":{
+                    "type": "custom",
+                    "cmd": "/etc/init.d/grafana-service reset",
+                    "timeout": 60
                 },
                 "add_job":{
                     "type": "custom",
@@ -64,19 +65,28 @@
                     "timeout": 60,
                     "service_params": {
                         "job_name": {{service_params.job_name}},
-                        "targets":{{service_params.targets}}
+                        "ip":{{service_params.ip}},
+                        "port":{{service_params.port}}
+                    }
+                },
+                "del_job":{
+                    "type": "custom",
+                    "cmd": "/etc/init.d/grafana-service deljob",
+                    "timeout": 60,
+                    "service_params": {
+                        "job_name": {{service_params.job_name}}
                     }
                 }
             },
             "health_check": {
                 "enable": true,
                 "interval_sec": 60,
-                "timeout_sec": 60,
-                "action_timeout_sec": 60,
-                "healthy_threshold": 3,
-                "unhealthy_threshold": 3,
-                "check_cmd": "/opt/prometheus/scripts/serverStatus.sh",
-                "action_cmd": "/opt/prometheus/scripts/recheck-health.sh"
+                "timeout_sec": 30,
+                "action_timeout_sec": 30,
+                "healthy_threshold": 2,
+                "unhealthy_threshold": 2,
+                "check_cmd": "/etc/init.d/grafana-service healthcheck",
+                "action_cmd": "/etc/init.d/grafana-service healthaction"
             },
             "advanced_actions": ["associate_eip"]
         }    
