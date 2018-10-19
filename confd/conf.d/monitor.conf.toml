@@ -1,0 +1,8 @@
+[template]
+src = "monitor.conf.tmpl"
+dest = "/etc/monitor/monitor.conf"
+keys = [
+    "/env",
+]
+
+reload_cmd = "/etc/init.d/grafana-service updateparam"

@@ -1,83 +1,147 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import base64
+import collections
 import json
 import yaml
 import sys
 import os
-import subprocess
 import time
 import traceback
 import logging.handlers
+import ruamel.yaml
 import sqlite3
-import requests
+from configobj import ConfigObj
+from ruamel.yaml.scalarstring import SingleQuotedScalarString
+from filelock import FileLock
+from utils import (
+    init_logger,
+    get_json_params,
+    exec_cmd,
+    check_local_service,
+    read_file,
+    wait_conf_file_ready,
+    http_request,
+    write_json_file
+)
 
 SUPPORTED_ACTIONS = {
     "displayjobs": "display the prometheus monitor job list",
     "addjob": "add job to the prometheus monitor job list",
     "deljob": "delete job from the prometheus monitor job list",
-    "reset": "reset the grafana server's admin password to default(admin)",
-    "modifyuser": "modify the admin's password",
+    "reset": "reset the grafana server's admin password",
     "dashboards": "display dashboard for download",
     "healthcheck": "check the service status",
     "healthaction": "take action if service check health failed",
     "start": "start prometheus and grafana-server",
     "stop": "stop prometheus and grafana-server",
-    "restart": "restart prometheus and grafana-server"
+    "restart": "restart prometheus and grafana-server",
+    "updateparam": "update parameters"
 }
+PROMETHEUS_PARAMS = ["prometheus_port", "tsdb_retention"]
+GRAFANA_PARAMS = ["grafana_port", "admin_user", "admin_password"]
+MONITOR_VERSION_FILE = "/etc/monitor/version"
+MONITOR_CNF = "/etc/monitor/monitor.conf"
+IP_FILE = "/etc/monitor/ip"
+GRAFANA_CNF = "/opt/grafana/conf/grafana.ini"
+PROMETHEUS_CNF = "/opt/prometheus/conf/prometheus.yml"
+PROMETHEUS_SCRIPT = "/opt/prometheus/scripts/run_prometheus.sh"
+DATASOURCE_FILE = "/opt/grafana/datasources/data_source.json"
+LOCK_TIMEOUT = 300
 
-# call the function before calling other functions of the current file
-def init_logger(logger_name, log_dir):
-    global logger
-    if not os.path.isdir(log_dir):
-        os.system("mkdir -p %s; chmod 755 %s" % (log_dir, log_dir))
-    radon_deploy_log = "%s/%s.log" % (log_dir, logger_name)
-    Rthandler = logging.handlers.RotatingFileHandler(radon_deploy_log, maxBytes=20 * 1024 * 1024 , backupCount=5)
-    formatter = logging.Formatter('%(asctime)s -%(thread)d- [%(levelname)s] %(message)s (%(filename)s:%(lineno)d)')
-    Rthandler.setFormatter(formatter)
+def load_params():
+    ret = wait_conf_file_ready(MONITOR_CNF)
+    if ret != 0:
+        return None
+    
+    params = {}
+    f = open(MONITOR_CNF, 'r')
+    for line in open(MONITOR_CNF):
+        line = f.readline()
+        param = line.split("=")
+        logger.info("param_split:%s",param)
+        if len(param) != 2:
+            continue
+        
+        key = param[0].strip()
+        val = param[1].strip()
 
-    logger = logging.getLogger('radon')
-    logger.addHandler(Rthandler)
-    logger.setLevel(logging.INFO)
-    return logger
+        if key[0] == '#':
+            continue
 
-def get_json_params(params=None):
-    json_params = {}
-    if params:
-        json_params = json.loads(params[0])
-    return json_params
+        if key and val:
+            if (key == "skip-name-resolve" and val == "OFF"):
+                key = "#skip-name-resolve"
+            params[key] = val
 
-def add_job(job_cnf):
+    rets = wait_conf_file_ready(IP_FILE)
+    if rets != 0:
+        return None
+    ip = read_file(IP_FILE)
+    if not ip:
+        logger.error("load_params get ip failed")
+        return None
+    params["local_ip"] = ip
+    
+    logger.info("load params:%s",params)
+    return params
+
+def is_prometheus_params(param):
+    if param in PROMETHEUS_PARAMS:
+        return True
+    return False
+
+def is_grafana_params(param):
+    if param in GRAFANA_PARAMS:
+        return True
+    return False
+
+def add_job(job_cnf,flock_path):
     logger.info("add_job")
 
     if not job_cnf:
         logger.error("add_job without config")
         return -1
-
     job_name = job_cnf.get("job_name", "").strip()
     ip = job_cnf.get("ip", "").strip()
     port = job_cnf.get("port", "")
-    if not job_name:
-        logger.error("add_job get job_name [%s] failed" % job_name)
-        return -1
-    if not ip:
-        logger.error("add_job get ip [%s] failed" % ip)
-        return -1
-    if not port:
-        logger.error("add_job get port [%d] failed" % port)
-        return -1
+    instance = job_cnf.get("instance", "").strip()
 
-    fd = open('/opt/prometheus/prometheus.yml', 'a')
-    l = []
-    l.append("  - job_name: '" + job_name + "'\n")
-    l.append("    static_configs:\n")
-    l.append("    - targets: ['" + ip + ":" + str(port) + "']\n")
-    fd.writelines(l)
-    fd.close()
+    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+        if not locked.is_locked:
+            logger.error("add_job get lock failed")
+            return -1
+        with open(PROMETHEUS_CNF, "r") as docs:
+            try:
+                alldata = ruamel.yaml.round_trip_load(docs, preserve_quotes=True)
+            except ruamel.yaml.YAMLError as exc:
+                logger.error('add_job open prometheus.yml failed %s' % exc)
+                return -1
+        labels = {}
+        labels['instance'] = SingleQuotedScalarString(instance)
+        targets = [SingleQuotedScalarString(ip + ":" + port)]
+        static_configs = {}
+        static_configs['labels'] = labels
+        static_configs['targets'] = targets
 
-    ret_code, _ = exec_cmd('service prometheus restart')
-    if ret_code != 0:
-        logger.error('add_job restart service prometheus failed')
-        return -1
+        find = False
+        for i in alldata['scrape_configs']:
+            if job_name == i['job_name']:
+                i['static_configs'].append(static_configs)
+                find = True
+                break
+        if not find:
+            scrape_configs = {}
+            scrape_configs['static_configs'] = [static_configs]
+            scrape_configs['job_name'] = SingleQuotedScalarString(job_name)
+            alldata['scrape_configs'].append(scrape_configs)
+
+        with open(PROMETHEUS_CNF, 'w+') as outfile:
+            try:
+                ruamel.yaml.round_trip_dump(alldata, outfile, default_flow_style=False, allow_unicode=True, indent=4, block_seq_indent=2)
+            except ruamel.yaml.YAMLError as exc:
+                logger.error('add_job write prometheus.yml failed %s' % exc)
+                return -1
 
     logger.info("add_job succeeded")
     return 0
@@ -90,29 +154,42 @@ def del_job(job_cnf):
         return -1
 
     job_name = job_cnf.get("job_name","").strip()
-    if not job_name:
-        logger.error("del_job get job_name [%s] failed" % job_name)
-        return -1
+    instance = job_cnf.get("instance","").strip()
 
-    iflag = 0
-    s = "- job_name: '" + job_name + "'"
-    with open('/opt/prometheus/prometheus.yml', 'r') as f:
-        lines = f.readlines()
-    f.close()
-    with open('/opt/prometheus/prometheus.yml', 'w') as g:
-        for line in lines:
-            if iflag == 0:
-                if s in line:
-                    iflag = 1
-                    continue
-                g.write(line)
-            elif iflag == 1:
-                if '- job_name: ' in line:
-                    iflag = 2
-                    g.write(line)
-            else :
-                g.write(line)
-    g.close()
+    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+        if not locked.is_locked:
+            logger.error("add_job get lock failed")
+            return -1
+        with open(PROMETHEUS_CNF, "r") as docs:
+            try:
+                alldata = ruamel.yaml.round_trip_load(docs, preserve_quotes=True)
+            except ruamel.yaml.YAMLError as exc:
+                logger.error('add_job open prometheus.yml failed %s' % exc)
+                return -1
+        
+        find = False
+        for i in alldata['scrape_configs']:
+            if job_name == i['job_name']:
+                for j in i['static_configs']:
+                    if instance == j['labels']['instance']:
+                        find = True
+                        if len(i['static_configs']) == 1:
+                            alldata['scrape_configs'].remove(i)
+                        else:
+                            i['static_configs'].remove(j)
+                        break
+                break
+        
+        if not find:
+            logger.error('del_job failed, cannot find job_name:%s, instance:%s', job_name, instance)
+            return -1
+
+        with open(PROMETHEUS_CNF, 'w+') as outfile:
+            try:
+                ruamel.yaml.round_trip_dump(alldata, outfile, default_flow_style=False, allow_unicode=True, indent=4, block_seq_indent=2)
+            except ruamel.yaml.YAMLError as exc:
+                logger.error('del_job write prometheus.yml failed %s' % exc)
+                return -1
 
     ret_code, _ = exec_cmd('service prometheus restart')
     if ret_code != 0:
@@ -122,66 +199,29 @@ def del_job(job_cnf):
     logger.info("del_job succeeded")
     return 0
 
-def modify_user(user_cnf):
-    logger.info("modify_user")
+def reset_admin(params, passwd):
+    logger.info("reset_admin.")
 
-    if not user_cnf:
+    if not passwd:
         logger.error("modify_user without config")
         return -1
-
-    oldpasswd = user_cnf.get("oldpasswd", "").strip()
-    newpasswd = user_cnf.get("newpasswd", "").strip()
-    confirmnew = user_cnf.get("confirmnew", "").strip()
-    if not oldpasswd:
-        logger.error("modify_user get oldpasswd [%s] failed" % oldpasswd)
-        return -1
+    newpasswd = passwd.get("newpasswd", "").strip()
     if not newpasswd:
         logger.error("modify_user get newpasswd [%s] failed" % newpasswd)
         return -1
-    if not confirmnew:
-        logger.error("modify_user get confirmnew [%s] failed" % confirmnew)
+
+    cmd = "/opt/grafana/bin/grafana-cli %s reset-admin-password --homepath '/opt/grafana' --config '%s' %s" % (params["admin_user"], GRAFANA_CNF, newpasswd)
+    ret_code, _ = exec_cmd(cmd)
+    if ret_code != 0:
+        logger.error('reset_admin failed')
         return -1
-    if newpasswd != confirmnew:
-        logger.error("modify_user please makesure the password is same!")
-        return -1
-
-    try:
-        url = 'http://localhost:3000/api/user/password'
-        body = {
-            "oldPassword": oldpasswd,
-            "newPassword": newpasswd,
-            "confirmNew": confirmnew
-        }
-        res = requests.put(url, json=body, headers={"Content-Type": "application/json"}, auth=('admin', oldpasswd))
-        if res.status_code != 200:
-            logger.error("modify_user failed, status [%d], reason [%s], data [%s]"
-                         % (res.status_code, res.reason, res.text))
-            return -1
-
-        logger.info("modify_user succeeded, status [%d], reason [%s], data [%s]"
-                     % (res.status_code, res.reason, res.text))
-        return 0
-    except:
-        err_msg = traceback.format_exc()
-        logger.error(err_msg)
-        logger.error("modify_user failed")
-        return -1
-
-def reset_admin():
-    logger.info("reset_admin")
-
-    conn = sqlite3.connect("/var/lib/grafana/grafana.db")
-    conn.execute("update user set password = '59acf18b94d7eb0694c61e60ce44c110c7a683ac6a8f09580d626f90f4a242000746579358d77dd9e570e83fa24faa88a8a6', salt = 'F3FAxVm33R' where login = 'admin'")
-    conn.commit()
-    conn.close()
-
-    logger.info("reset_admin succeeded")
+    logger.info("reset_admin succeeded.")
     return 0
 
 def disp_list():
     logger.info("disp_list")
 
-    fd = open('/opt/prometheus/prometheus.yml', 'r')
+    fd = open(PROMETHEUS_CNF, 'r')
     dict_tmp = yaml.load(fd)
     fd.close()
 
@@ -189,15 +229,19 @@ def disp_list():
     for i in dict_tmp['scrape_configs']:
         job_name = i['job_name']
         for j in i['static_configs']:
+            instance = ""
+            if j.has_key('labels'):
+                if j['labels'].has_key('instance'):
+                    instance = j['labels']['instance']
             for k in j['targets']:
                 lst = k.split(":")
                 if len(lst) != 2:
                     logger.error("disp_list failed, unsyntax err for 'prometheus.yml'")
                     return -1
-                l.append([job_name, lst[0], lst[1]])
+                l.append([job_name, lst[0], lst[1], instance])
 
     ret_cnf = {
-        "labels": ["job_name", "ip", "port"],
+        "labels": ["job_name", "ip", "port", "instance"],
         "data": l
     }
     print json.dumps(ret_cnf)
@@ -223,42 +267,14 @@ def disp_dashboard():
     logger.info("disp_dashboard succeeded")
     return 0
 
-def exec_cmd(cmd):
-    """
-    :param cmd: the command you want to call
-    :return: ret_code, output
-    """
-    try:
-        ret = subprocess.check_output(cmd, shell=True)
-        return 0, ret
-    except subprocess.CalledProcessError as e:
-        return e.returncode, e.output
-
-def check_local_service(service,port):
-    cmd = 'nc -z -v -w10 127.0.0.1 %d' % port
-    ret_code, _ = exec_cmd(cmd)
-    if ret_code != 0:
-        logger.error('no process listen at %d' % port)
-        return False
-
-    cmd = 'pidof %s' % service
-    ret_code, output = exec_cmd(cmd)
-    if ret_code != 0 or len(output) == 0:
-        #port occupied by other process,need kill the process 
-        command='''kill -9 $(netstat -nlp | grep : %d | awk '{print $7}' | awk -F"/" '{ print $1 }')''' % port
-        exec_cmd(command)
-        logger.error('cannot find %s process' % service)
-        return False
-    return True
-
-def health_check():
+def health_check(params):
     logger.info("health_check")
     bflag = False
-    if not check_local_service("prometheus", 9090):
+    if not check_local_service("prometheus", params["prometheus_port"]):
         logger.error('check prometheus process failed')
         bflag = True
 
-    if not check_local_service("grafana-server", 3000):
+    if not check_local_service("grafana-server", params["grafana_port"]):
         logger.error('check grafana-server process failed')
         if bflag:
             return -3, "prometheus and grafana-server are not running"
@@ -270,9 +286,9 @@ def health_check():
     logger.info("health_check succeeded")
     return 0,""
 
-def health_action():
+def health_action(params):
     logger.info("health_action")
-    ret = health_check()
+    ret = health_check(params)
 
     cmd = ''
     if ret == -1:
@@ -291,21 +307,21 @@ def health_action():
     logger.info("health_action succeeded")
     return 0
 
-def stop_server():
+def stop_server(params):
     logger.info("stop_server")
 
-    if not check_local_service("prometheus", 9090):
+    if not check_local_service("prometheus", params["prometheus_port"]):
         logger.warning("stop_server skips the step to stop prometheus")
     else:
-        ret_code, _ = exec_cmd('service prometheus stop')
+        ret_code, output = exec_cmd('service prometheus stop')
         if ret_code != 0:
             logger.error('stop_server stop the service prometheus failed, reason %s' % output)
             return -1
 
-    if not check_local_service("grafana-server", 3000):
+    if not check_local_service("grafana-server", params["grafana_port"]):
         logger.warning("stop_server skips the step to stop grafana-server")
     else:
-        ret_code, _ = exec_cmd('service grafana-server stop')
+        ret_code, output = exec_cmd('service grafana-server stop')
         if ret_code != 0:
             logger.error('stop_server stop the service grafana-server failed, reason %s' % output)
             return -1
@@ -313,35 +329,172 @@ def stop_server():
     logger.info("stop_server succeeded")
     return 0
 
-def start_server():
+def start_server(params, flock_path):
     logger.info("start_server")
 
-    if check_local_service("prometheus", 9090):
+    if check_local_service("prometheus", params["prometheus_port"]):
         logger.warning("start_server skips the step to start prometheus")
     else:
-        ret_code, _ = exec_cmd('service prometheus start')
+        generate_script(params, flock_path)
+        ret_code, output = exec_cmd('service prometheus start')
         if ret_code != 0:
             logger.error('start_server start the service prometheus failed, reason %s' % output)
             return -1
 
-    if check_local_service("grafana-server", 3000):
+    if check_local_service("grafana-server", params["grafana_port"]):
         logger.warning("start_server skips the step to start grafana-server")
     else:
-        ret_code, _ = exec_cmd('service grafana-server start')
+        generate_cnf(params, flock_path)
+        ret_code, output = exec_cmd('service grafana-server start')
         if ret_code != 0:
             logger.error('start_server start the service grafana-server failed, reason %s' % output)
             return -1
-
+    time.sleep(3)
+    res = import_datasources(params)
+    if res != 0:
+        logger.error('start_server fail')
+        return -1
     logger.info("start_server succeeded")
     return 0
 
-def restart_server():
+def restart_server(params, flock_path):
     logger.info("restart_server")
-    stop_server()
-    if 0 != start_server():
+    stop_server(params)
+    if 0 != start_server(params, flock_path):
         logger.error("restart_server failed")
         return -1
     logger.info("restart_server succeeded")
+    return 0
+
+def update_params(params, flock_path):
+    logger.info("update_params")
+
+    if not check_local_service("grafana-server", params["grafana_port"]):
+        logger.info("update_params grafana-server need update")
+        with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+            if not locked.is_locked:
+                logger.error("update_params get lock failed")
+                return -1
+            if not os.path.exists(GRAFANA_CNF):
+                logger.error("update_params get grafana.ini failed")
+                return -1
+            config = ConfigObj(GRAFANA_CNF)
+            config['server']['http_port']=params["grafana_port"]
+            config.write() 
+        ret_code, _ = exec_cmd('service grafana-server restart')
+        if ret_code != 0:
+            logger.error('update_params restart service grafana-server failed')
+            return -1
+
+    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+        if not locked.is_locked:
+            logger.error("update_params get lock failed")
+            return -1
+        if not os.path.exists(PROMETHEUS_SCRIPT):
+            logger.error("update_params get run_prometheus.sh failed")
+            return -1
+        text = open(PROMETHEUS_SCRIPT).read()
+        run_text = '''#!/bin/bash
+set -e
+
+cd /opt/prometheus || exit 1
+exec > >(tee -i -a "/data/prometheus/log/prometheus.log")
+exec 2>&1
+
+exec bin/prometheus \\
+    --config.file="%s" \\
+    --web.listen-address=":%s" \\
+    --web.external-url="http://%s:%s/" \\
+    --web.enable-admin-api \\
+    --log.level="info" \\
+    --storage.tsdb.path="/data/prometheus/data" \\
+    --storage.tsdb.retention="%s"
+        ''' % (PROMETHEUS_CNF, params["prometheus_port"], params["local_ip"], params["prometheus_port"], params["tsdb_retention"])
+        if text != run_text:
+            logger.info("update_params prometheus need update")
+            f = open(PROMETHEUS_SCRIPT, 'w')
+            f.write(run_text)
+            f.close()
+            exec_cmd('chmod +x %s' % PROMETHEUS_SCRIPT)
+            ret_code, _ = exec_cmd('service prometheus restart')
+            if ret_code != 0:
+                logger.error('update_params restart service prometheus failed')
+                return -1
+    logger.info("update_params succeeded")
+    return 0
+
+def generate_cnf(params, flock_path):
+    logger.info("generate_cnf")
+    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+        if not locked.is_locked:
+            logger.error("generate_cnf get lock failed")
+            return -1
+        if not os.path.exists(GRAFANA_CNF):
+            logger.error("generate_cnf get grafana.ini failed")
+            return -1
+        config = ConfigObj(GRAFANA_CNF)
+        config['server']['http_port']=params["grafana_port"]
+        config['server']['domain']=params["local_ip"]
+        config['security']['admin_user']=params["admin_user"]
+        config['security']['admin_password']=params["admin_password"]
+        config.write()
+    logger.info("generate_cnf succeeded")
+    return 0
+
+def generate_script(params, flock_path):
+    logger.info("generate_cnf")
+    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+        if not locked.is_locked:
+            logger.error("generate_script get lock failed")
+            return -1
+        run_text = '''#!/bin/bash
+set -e
+
+cd /opt/prometheus || exit 1
+exec > >(tee -i -a "/data/prometheus/log/prometheus.log")
+exec 2>&1
+
+exec bin/prometheus \\
+    --config.file="%s" \\
+    --web.listen-address=":%s" \\
+    --web.external-url="http://%s:%s/" \\
+    --web.enable-admin-api \\
+    --log.level="info" \\
+    --storage.tsdb.path="/data/prometheus/data" \\
+    --storage.tsdb.retention="%s"
+        ''' % (PROMETHEUS_CNF, params["prometheus_port"], params["local_ip"], params["prometheus_port"], params["tsdb_retention"])
+
+        f = open(PROMETHEUS_SCRIPT, 'w')
+        f.write(run_text)
+        f.close()
+        exec_cmd('chmod +x %s' % PROMETHEUS_SCRIPT)
+    logger.info("generate_cnf succeeded")
+    return 0
+
+def import_datasources(params):
+    logger.info("import_datasources")
+
+    if os.path.exists(DATASOURCE_FILE):
+        logger.warning("neednot import_datasources")
+        return 0
+
+    url = '/api/datasources'
+    auth = base64.b64encode(params["admin_user"]+ ':'+ params["admin_password"]) 
+    headers = {"Content-Type": "application/json",
+               "Authorization": "Basic " + auth}
+    body = {
+        "name":"Prometheus",
+        "type":"prometheus",
+        "access":"proxy",
+        "url":"http://%s:%s/" % (params["local_ip"], params["prometheus_port"]),
+        "basicAuth": False
+    }
+    res2, _ = http_request(params["local_ip"], int(params["grafana_port"]), "POST", url, json.dumps(body), headers)
+    if res2 != 0:
+        logger.error("import_datasources fail")
+        return -1
+    write_json_file(DATASOURCE_FILE, body)
+    logger.info("import_datasources succeeded")
     return 0
 
 def print_usage():
@@ -365,33 +518,40 @@ if __name__ == "__main__":
     logger = init_logger(action, "/data/log")
     logger.info(sys.argv)
 
+    version = read_file(MONITOR_VERSION_FILE)
+    if not version:
+        logger.error("read_version failed")
+        exit(-1)
+    flock_path = "/tmp/%s" %version
+    params = load_params()
+
     ret = 0
     try:
         if action == "displayjobs":
             ret = disp_list()
         elif action == "addjob":
             job_cnf = get_json_params(sys.argv[2:])
-            ret = add_job(job_cnf)
+            ret = add_job(job_cnf,flock_path)
         elif action == "reset":
-            ret = reset_admin()
-        elif action == "modifyuser":
-            user_cnf = get_json_params(sys.argv[2:])
-            ret = modify_user(user_cnf)
+            passwd = get_json_params(sys.argv[2:])
+            ret = reset_admin(params, passwd)
         elif action == "dashboards":
             ret = disp_dashboard()
         elif action == "deljob":
             job_cnf = get_json_params(sys.argv[2:])
             ret = del_job(job_cnf)
         elif action == "healthcheck":
-            ret, _ = health_check()
+            ret, _ = health_check(params)
         elif action == "healthaction":
-            ret = health_action()
+            ret = health_action(params)
         elif action == "start":
-            ret = start_server()
+            ret = start_server(params, flock_path)
         elif action == "stop":
-            ret = stop_server()
+            ret = stop_server(params)
         elif action == "restart":
-            ret = restart_server()
+            ret = restart_server(params, flock_path)
+        elif action == "updateparam":
+            ret = update_params(params, flock_path)
         exit(ret)
     except Exception, e:
         logger.error("%s" % traceback.format_exc())

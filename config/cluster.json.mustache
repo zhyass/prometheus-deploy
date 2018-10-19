@@ -20,7 +20,7 @@
             "container": {
                 "type": "lxc",
                 "zone": "gd2a",
-                "image": "img-ejwiduab"
+                "image": "img-f3hwbolx"
             },
             "count": {{cluster.grafana_node.count}},
             "instance_class": {{cluster.grafana_node.instance_class}},
@@ -43,52 +43,63 @@
                 "stop": {
                     "cmd": "/etc/init.d/grafana-service stop"
                 },
-                "modify_user":
-                {
-                    "type": "custom",
-                    "cmd": "/etc/init.d/grafana-service modifyuser",
-                    "timeout": 60,
-                    "service_params": {
-                        "oldpasswd": {{service_params.oldpasswd}},
-                        "newpasswd": {{service_params.newpasswd}},
-                        "confirmnew": {{service_params.confirmnew}}
-                    }
-                },
-                "reset_admin":{
+                "reset_admin": {
                     "type": "custom",
                     "cmd": "/etc/init.d/grafana-service reset",
-                    "timeout": 60
+                    "timeout": 60,
+                    "service_params": {
+                        "newpasswd": {{service_params.newpasswd}}
+                    }
                 },
-                "add_job":{
+                "add_job": {
                     "type": "custom",
                     "cmd": "/etc/init.d/grafana-service addjob",
                     "timeout": 60,
                     "service_params": {
                         "job_name": {{service_params.job_name}},
                         "ip":{{service_params.ip}},
-                        "port":{{service_params.port}}
+                        "port":{{service_params.port}},
+                        "instance":{{service_params.instance}}
                     }
                 },
-                "del_job":{
+                "del_job": {
                     "type": "custom",
                     "cmd": "/etc/init.d/grafana-service deljob",
                     "timeout": 60,
                     "service_params": {
-                        "job_name": {{service_params.job_name}}
+                        "job_name": {{service_params.job_name}},
+                        "instance":{{service_params.instance}}
                     }
                 }
-            },
-            "health_check": {
-                "enable": true,
-                "interval_sec": 60,
-                "timeout_sec": 30,
-                "action_timeout_sec": 30,
-                "healthy_threshold": 2,
-                "unhealthy_threshold": 2,
-                "check_cmd": "/etc/init.d/grafana-service healthcheck",
-                "action_cmd": "/etc/init.d/grafana-service healthaction"
-            },
-            "advanced_actions": ["associate_eip"]
-        }    
-    ]
+            }
+        } 
+    ],
+    "health_check": {
+        "enable": true,
+        "interval_sec": 60,
+        "timeout_sec": 30,
+        "action_timeout_sec": 30,
+        "healthy_threshold": 2,
+        "unhealthy_threshold": 2,
+        "check_cmd": "/etc/init.d/grafana-service healthcheck",
+        "action_cmd": "/etc/init.d/grafana-service healthaction"
+    },
+    "advanced_actions": ["associate_eip"],
+    "endpoints": {
+        "prometheus": {
+            "port": {{env.prometheus_port}},
+            "protocol": "tcp"
+        },
+        "grafana": {
+            "port": {{env.grafana_port}},
+            "protocol": "tcp"
+        }
+    },
+    "env": {
+        "grafana_port": {{env.grafana_port}},
+        "admin_user": {{env.admin_user}},
+        "admin_password": {{env.admin_password}},
+        "prometheus_port": {{env.prometheus_port}},
+        "tsdb_retention": {{env.tsdb_retention}}
+    }   
 }

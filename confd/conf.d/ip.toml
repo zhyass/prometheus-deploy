@@ -1,0 +1,6 @@
+[template]
+src = "ip.tmpl"
+dest = "/etc/monitor/ip"
+keys = [
+    "/",
+]

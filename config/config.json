@@ -112,14 +112,14 @@
                 {
                     "key": "job_name",
                     "label": "JobName",
-                    "description": "Add job name into prometheus.yml, for example: radon",
+                    "description": "job name in prometheus.yml, for example: radon",
                     "type": "string",
                     "required": "yes"
                 },
                 {
                     "key": "ip",
                     "label": "IP",
-                    "description": "Add targets into prometheus.yml, for example: 127.0.0.1",
+                    "description": "targets in prometheus.yml, for example: 127.0.0.1",
                     "type": "string",
                     "pattern": "^((25[0-5]|2[0-4]\\d|[1]{1}\\d{1}\\d{1}|[1-9]{1}\\d{1}|\\d{1})($|(?!\\.$)\\.)){4}$",
                     "required": "yes"
@@ -127,35 +127,81 @@
                 {
                     "key": "port",
                     "label": "Port",
-                    "description": "Add targets into prometheus.yml, for example: 13308",
+                    "description": "targets in prometheus.yml, for example: 13308",
                     "type": "integer",
                     "max": 65535,
-                    "default": 13308,
                     "required": "yes"
                 },
                 {
-                    "key": "oldpasswd",
-                    "label": "oldPassword",
-                    "description": "Grafana's admin password.",
-                    "type": "password",
-                    "default": "",
+                    "key": "instance",
+                    "label": "Instance",
+                    "description": "instance label in prometheus.yml",
+                    "type": "string",
                     "required": "yes"
                 },
                 {
                     "key": "newpasswd",
                     "label": "newPassword",
-                    "description": "",
+                    "description": "Reset the grafana's admin password.",
                     "type": "password",
-                    "default": "",
+                    "pattern": "^.{5,30}$",
+                    "default": "admin",
                     "required": "yes"
-                },
+                }
+            ]
+        }, {
+            "key": "env",
+            "description": "Application configuration properties",
+            "type": "array",
+            "properties": [
                 {
-                    "key": "confirmnew",
-                    "label": "confirmNew",
-                    "description": "",
+                    "key": "grafana_port",
+                    "label": "Grafana_port",
+                    "description": "The grafana's http port to use.",
+                    "type": "integer",
+                    "min": 3000,
+                    "max": 65535,
+                    "default": 3000,
+                    "required": "no"
+                }, 
+                {
+                    "key": "admin_user",
+                    "label": "Admin_user",
+                    "description": "Default grafana admin user, created on startup.",
+                    "type": "string",
+                    "default": "admin",
+                    "changeable": false,
+                    "pattern": "^\\w{1,30}$",
+                    "required": "no"
+                }, 
+                {
+                    "key": "admin_password",
+                    "label": "Admin_password",
+                    "description": "Default admin password, can be changed before first start of grafana,  or in profile settings.",
+                    "changeable": false,
+                    "default": "admin",
                     "type": "password",
-                    "default": "",
-                    "required": "yes"
+                    "pattern": "^.{5,30}$",
+                    "required": "no"
+                }, 
+                {
+                    "key": "prometheus_port",
+                    "label": "Prometheus_port",
+                    "description": "The prometheus's http port to use.",
+                    "type": "integer",
+                    "min": 9090,
+                    "max": 65535,
+                    "default": 9090,
+                    "required": "no"
+                }, 
+                {
+                    "key": "tsdb_retention",
+                    "label": "TSDB_retention",
+                    "description": "This determines when to remove old data. Defaults to 15d.",
+                    "type": "string",
+                    "default": "15d",
+                    "pattern": "^[1-9]\\d*d$",
+                    "required": "no"
                 }
             ]
         }
