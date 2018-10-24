@@ -22,7 +22,8 @@ from utils import (
     read_file,
     wait_conf_file_ready,
     http_request,
-    write_json_file
+    write_json_file,
+    read_json_file
 )
 
 SUPPORTED_ACTIONS = {
@@ -38,8 +39,6 @@ SUPPORTED_ACTIONS = {
     "restart": "restart prometheus and grafana-server",
     "updateparam": "update parameters"
 }
-PROMETHEUS_PARAMS = ["prometheus_port", "tsdb_retention"]
-GRAFANA_PARAMS = ["grafana_port", "admin_user", "admin_password"]
 MONITOR_VERSION_FILE = "/etc/monitor/version"
 MONITOR_CNF = "/etc/monitor/monitor.conf"
 IP_FILE = "/etc/monitor/ip"
@@ -48,6 +47,7 @@ PROMETHEUS_CNF = "/opt/prometheus/conf/prometheus.yml"
 PROMETHEUS_SCRIPT = "/opt/prometheus/scripts/run_prometheus.sh"
 DATASOURCE_FILE = "/opt/grafana/datasources/data_source.json"
 LOCK_TIMEOUT = 300
+GRAFANA_PWD = "/etc/monitor/grafana.pwd"
 
 def load_params():
     ret = wait_conf_file_ready(MONITOR_CNF)
@@ -70,8 +70,6 @@ def load_params():
             continue
 
         if key and val:
-            if (key == "skip-name-resolve" and val == "OFF"):
-                key = "#skip-name-resolve"
             params[key] = val
 
     rets = wait_conf_file_ready(IP_FILE)
@@ -85,16 +83,6 @@ def load_params():
     
     logger.info("load params:%s",params)
     return params
-
-def is_prometheus_params(param):
-    if param in PROMETHEUS_PARAMS:
-        return True
-    return False
-
-def is_grafana_params(param):
-    if param in GRAFANA_PARAMS:
-        return True
-    return False
 
 def add_job(job_cnf,flock_path):
     logger.info("add_job")
@@ -117,19 +105,23 @@ def add_job(job_cnf,flock_path):
             except ruamel.yaml.YAMLError as exc:
                 logger.error('add_job open prometheus.yml failed %s' % exc)
                 return -1
-        labels = {}
-        labels['instance'] = SingleQuotedScalarString(instance)
-        targets = [SingleQuotedScalarString(ip + ":" + port)]
         static_configs = {}
-        static_configs['labels'] = labels
+        if instance != "":
+            labels = {}
+            labels['instance'] = SingleQuotedScalarString(instance)
+            static_configs['labels'] = labels
+        targets = [SingleQuotedScalarString(ip + ":" + str(port))]
         static_configs['targets'] = targets
 
         find = False
-        for i in alldata['scrape_configs']:
-            if job_name == i['job_name']:
-                i['static_configs'].append(static_configs)
-                find = True
-                break
+        if alldata['scrape_configs'] is not None:
+            for i in alldata['scrape_configs']:
+                if job_name == i['job_name']:
+                    i['static_configs'].append(static_configs)
+                    find = True
+                    break
+        else:
+            alldata['scrape_configs'] = []
         if not find:
             scrape_configs = {}
             scrape_configs['static_configs'] = [static_configs]
@@ -143,6 +135,10 @@ def add_job(job_cnf,flock_path):
                 logger.error('add_job write prometheus.yml failed %s' % exc)
                 return -1
 
+    ret_code, _ = exec_cmd('service prometheus restart')
+    if ret_code != 0:
+        logger.error('del_job restart service prometheus failed')
+        return -1
     logger.info("add_job succeeded")
     return 0
 
@@ -170,20 +166,27 @@ def del_job(job_cnf):
         find = False
         for i in alldata['scrape_configs']:
             if job_name == i['job_name']:
-                for j in i['static_configs']:
-                    if instance == j['labels']['instance']:
-                        find = True
-                        if len(i['static_configs']) == 1:
-                            alldata['scrape_configs'].remove(i)
-                        else:
-                            i['static_configs'].remove(j)
-                        break
+                if  instance == "":
+                    find = True
+                    alldata['scrape_configs'].remove(i)
+                else:
+                    for j in i['static_configs']:
+                        if j.has_key('labels') and j['labels'].has_key('instance'):
+                            if instance == j['labels']['instance']:
+                                find = True
+                                if len(i['static_configs']) == 1:
+                                    alldata['scrape_configs'].remove(i)
+                                else:
+                                    i['static_configs'].remove(j)
+                                break
                 break
         
         if not find:
             logger.error('del_job failed, cannot find job_name:%s, instance:%s', job_name, instance)
             return -1
 
+        if len(alldata['scrape_configs']) == 0:
+            alldata['scrape_configs'] = None
         with open(PROMETHEUS_CNF, 'w+') as outfile:
             try:
                 ruamel.yaml.round_trip_dump(alldata, outfile, default_flow_style=False, allow_unicode=True, indent=4, block_seq_indent=2)
@@ -215,6 +218,16 @@ def reset_admin(params, passwd):
     if ret_code != 0:
         logger.error('reset_admin failed')
         return -1
+
+    pwd = "%s" % newpasswd
+    auth = base64.b64encode(params["admin_user"]+ ':'+ pwd) 
+    headers = {"Content-Type": "application/json",
+            "Authorization": "Basic " + auth}
+    res = write_json_file(GRAFANA_PWD, headers)
+    if res != 0:
+        logger.info("reset_admin failed")
+        return -1
+
     logger.info("reset_admin succeeded.")
     return 0
 
@@ -371,55 +384,39 @@ def update_params(params, flock_path):
 
     if not check_local_service("grafana-server", params["grafana_port"]):
         logger.info("update_params grafana-server need update")
-        with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
-            if not locked.is_locked:
-                logger.error("update_params get lock failed")
-                return -1
-            if not os.path.exists(GRAFANA_CNF):
-                logger.error("update_params get grafana.ini failed")
-                return -1
-            config = ConfigObj(GRAFANA_CNF)
-            config['server']['http_port']=params["grafana_port"]
-            config.write() 
+        result = generate_cnf(params, flock_path)
+        if result != 0:
+            logger.error('update_params failed')
+            return -1
         ret_code, _ = exec_cmd('service grafana-server restart')
         if ret_code != 0:
             logger.error('update_params restart service grafana-server failed')
             return -1
-
-    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
-        if not locked.is_locked:
-            logger.error("update_params get lock failed")
+        time.sleep(3)
+        
+    change = 0
+    if not os.path.exists(PROMETHEUS_SCRIPT):
+        change = 2
+    else:
+        last_line = open(PROMETHEUS_SCRIPT).readlines()[-1]
+        if last_line != '    --storage.tsdb.retention="%s"' % params["tsdb_retention"]:
+            change = 1
+        if not check_local_service("prometheus", params["prometheus_port"]):
+            change = 2
+    
+    if change == 0:
+        logger.info("update_params prometheus neednot update")
+        return 0
+    generate_script(params, flock_path)
+    ret_code, _ = exec_cmd('service prometheus restart')
+    if ret_code != 0:
+        logger.error('update_params restart service prometheus failed')
+        return -1
+    if change == 2:
+        res = update_datasources(params)
+        if res != 0:
+            logger.error('update_params update_datasources failed')
             return -1
-        if not os.path.exists(PROMETHEUS_SCRIPT):
-            logger.error("update_params get run_prometheus.sh failed")
-            return -1
-        text = open(PROMETHEUS_SCRIPT).read()
-        run_text = '''#!/bin/bash
-set -e
-
-cd /opt/prometheus || exit 1
-exec > >(tee -i -a "/data/prometheus/log/prometheus.log")
-exec 2>&1
-
-exec bin/prometheus \\
-    --config.file="%s" \\
-    --web.listen-address=":%s" \\
-    --web.external-url="http://%s:%s/" \\
-    --web.enable-admin-api \\
-    --log.level="info" \\
-    --storage.tsdb.path="/data/prometheus/data" \\
-    --storage.tsdb.retention="%s"
-        ''' % (PROMETHEUS_CNF, params["prometheus_port"], params["local_ip"], params["prometheus_port"], params["tsdb_retention"])
-        if text != run_text:
-            logger.info("update_params prometheus need update")
-            f = open(PROMETHEUS_SCRIPT, 'w')
-            f.write(run_text)
-            f.close()
-            exec_cmd('chmod +x %s' % PROMETHEUS_SCRIPT)
-            ret_code, _ = exec_cmd('service prometheus restart')
-            if ret_code != 0:
-                logger.error('update_params restart service prometheus failed')
-                return -1
     logger.info("update_params succeeded")
     return 0
 
@@ -434,15 +431,24 @@ def generate_cnf(params, flock_path):
             return -1
         config = ConfigObj(GRAFANA_CNF)
         config['server']['http_port']=params["grafana_port"]
-        config['server']['domain']=params["local_ip"]
-        config['security']['admin_user']=params["admin_user"]
-        config['security']['admin_password']=params["admin_password"]
+        if config['server']['domain']=="":
+            pwd = "%s" % params["admin_password"]
+            auth = base64.b64encode(params["admin_user"]+ ':'+ pwd) 
+            headers = {"Content-Type": "application/json",
+                    "Authorization": "Basic " + auth}
+            res = write_json_file(GRAFANA_PWD, headers)
+            if res != 0:
+                logger.info("generate_cnf failed")
+                return -1
+            config['server']['domain']=params["local_ip"]
+            config['security']['admin_user']=params["admin_user"]
+            config['security']['admin_password']=params["admin_password"]
         config.write()
     logger.info("generate_cnf succeeded")
     return 0
 
 def generate_script(params, flock_path):
-    logger.info("generate_cnf")
+    logger.info("generate_script")
     with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
         if not locked.is_locked:
             logger.error("generate_script get lock failed")
@@ -461,27 +467,29 @@ exec bin/prometheus \\
     --web.enable-admin-api \\
     --log.level="info" \\
     --storage.tsdb.path="/data/prometheus/data" \\
-    --storage.tsdb.retention="%s"
-        ''' % (PROMETHEUS_CNF, params["prometheus_port"], params["local_ip"], params["prometheus_port"], params["tsdb_retention"])
+    --storage.tsdb.retention="%s"''' % (PROMETHEUS_CNF, params["prometheus_port"], params["local_ip"], params["prometheus_port"], params["tsdb_retention"])
 
         f = open(PROMETHEUS_SCRIPT, 'w')
         f.write(run_text)
         f.close()
         exec_cmd('chmod +x %s' % PROMETHEUS_SCRIPT)
-    logger.info("generate_cnf succeeded")
+    logger.info("generate_script succeeded")
     return 0
 
 def import_datasources(params):
     logger.info("import_datasources")
 
-    if os.path.exists(DATASOURCE_FILE):
-        logger.warning("neednot import_datasources")
+    url1 = '/api/datasources/id/Prometheus'
+    headers = read_json_file(GRAFANA_PWD)
+    if not headers:
+        logger.error("import_datasources failed")
+        return -1
+    res1, _ = http_request(params["local_ip"], int(params["grafana_port"]), "GET", url1, None, headers)
+    if res1 == 0:
+        logger.info("neednot import_datasources")
         return 0
 
     url = '/api/datasources'
-    auth = base64.b64encode(params["admin_user"]+ ':'+ params["admin_password"]) 
-    headers = {"Content-Type": "application/json",
-               "Authorization": "Basic " + auth}
     body = {
         "name":"Prometheus",
         "type":"prometheus",
@@ -493,8 +501,41 @@ def import_datasources(params):
     if res2 != 0:
         logger.error("import_datasources fail")
         return -1
-    write_json_file(DATASOURCE_FILE, body)
+
     logger.info("import_datasources succeeded")
+    return 0
+
+def update_datasources(params):
+    logger.info("update_datasources")
+
+    url1 = '/api/datasources/Prometheus'
+    headers = read_json_file(GRAFANA_PWD)
+    if not headers:
+        logger.error("update_datasources failed")
+        return -1
+    res1, strs = http_request(params["local_ip"], int(params["grafana_port"]), "GET", url1, None, headers)
+
+    if res1 == 0:
+        body = json.loads(strs)
+        body['url'] = "http://%s:%s/" % (params["local_ip"], params["prometheus_port"])
+        url = '/api/datasources/%d' % body['id']
+        method = "PUT"
+    else:
+        url = '/api/datasources'
+        body = {
+            "name":"Prometheus",
+            "type":"prometheus",
+            "access":"proxy",
+            "url":"http://%s:%s/" % (params["local_ip"], params["prometheus_port"]),
+            "basicAuth": False
+        }
+        method = "POST"
+    res2, _ = http_request(params["local_ip"], int(params["grafana_port"]), method, url, json.dumps(body), headers)
+    if res2 != 0:
+        logger.error("update_datasources fail")
+        return -1
+
+    logger.info("update_datasources succeeded")
     return 0
 
 def print_usage():

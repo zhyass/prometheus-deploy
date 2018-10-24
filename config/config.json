@@ -112,7 +112,7 @@
                 {
                     "key": "job_name",
                     "label": "JobName",
-                    "description": "job name in prometheus.yml, for example: radon",
+                    "description": "job name in prometheus.yml",
                     "type": "string",
                     "required": "yes"
                 },
@@ -121,7 +121,7 @@
                     "label": "IP",
                     "description": "targets in prometheus.yml, for example: 127.0.0.1",
                     "type": "string",
-                    "pattern": "^((25[0-5]|2[0-4]\\d|[1]{1}\\d{1}\\d{1}|[1-9]{1}\\d{1}|\\d{1})($|(?!\\.$)\\.)){4}$",
+                    "pattern": "^((25[0-5]|2[0-4]\\d|[1]{1}\\d{1}\\d{1}|[1-9]{1}\\d{1}|\\d{1})($|(?!\\.$)\\.)){4}|localhost$",
                     "required": "yes"
                 },
                 {
@@ -137,7 +137,8 @@
                     "label": "Instance",
                     "description": "instance label in prometheus.yml",
                     "type": "string",
-                    "required": "yes"
+                    "default": "",
+                    "required": "no"
                 },
                 {
                     "key": "newpasswd",
@@ -177,7 +178,7 @@
                 {
                     "key": "admin_password",
                     "label": "Admin_password",
-                    "description": "Default admin password, can be changed before first start of grafana,  or in profile settings.",
+                    "description": "Default admin password, can be changed before first start of grafana, or in profile settings.",
                     "changeable": false,
                     "default": "admin",
                     "type": "password",
@@ -200,7 +201,7 @@
                     "description": "This determines when to remove old data. Defaults to 15d.",
                     "type": "string",
                     "default": "15d",
-                    "pattern": "^[1-9]\\d*d$",
+                    "pattern": "^[1-9]\\d*(d|h|m|s)$",
                     "required": "no"
                 }
             ]

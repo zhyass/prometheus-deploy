@@ -142,3 +142,16 @@ def write_json_file(filepath, record):
     except Exception, e:
         logger.error("write json failed: %s" % e)
         return -1
+
+def read_json_file(filepath):
+    ret = None
+    try:
+        if os.path.isfile(filepath):
+            f = open(filepath, "r")
+            read_buf = f.read()
+            f.close()
+            ret = json.loads(read_buf)
+        return ret
+    except Exception, e:
+        logger.error("load json failed: %s" % e)
+        return ret

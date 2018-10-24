@@ -18,7 +18,7 @@
     "value": "地址",
     "Grafana's dashboards template. Download by wget ftp://ip/file": "Grafana 的 dashboards 模板.在内网通过 ftp 下载: wget ftp://ip/file",
     "Display the Prometheus's job list.": "prometheus.yml中配置的监控服务列表",
-    "job name in prometheus.yml, for example: radon": "监控任务名,例如: radon",
+    "job name in prometheus.yml": "监控任务名",
     "targets in prometheus.yml, for example: 127.0.0.1": "监控任务IP,例如: 127.0.0.1",
     "targets in prometheus.yml, for example: 13308": "监控任务端口,例如: 13308",
     "Reset the grafana's admin password.": "重置grafana的admin账户密码",
@@ -41,7 +41,7 @@
     "fileName": "模板文件",
     "The grafana's http port to use.": "Grafana 使用的http端口.",
     "Default grafana admin user, created on startup.": "Grafana默认的admin用户，Grafana第一次启动时创建.",
-    "Default admin password, can be changed before first start of grafana,  or in profile settings.": "Grafana默认admin用户的密码，在第一次启动前可以在配置文件中改变",
+    "Default admin password, can be changed before first start of grafana, or in profile settings.": "Grafana默认admin用户的密码，在第一次启动前可以在配置文件中改变",
     "The prometheus's http port to use.": "Prometheus 使用的http端口.",
     "This determines when to remove old data. Defaults to 15d.": "TSDB的数据保存时间，默认为15d."
 }
