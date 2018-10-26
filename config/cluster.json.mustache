@@ -16,18 +16,17 @@
     },
     "nodes": [
         {
-            "role": "grafana_node",
             "container": {
                 "type": "lxc",
                 "zone": "gd2a",
-                "image": "img-b336wh1b"
+                "image": "img-mmgceug5"
             },
-            "count": {{cluster.grafana_node.count}},
-            "instance_class": {{cluster.grafana_node.instance_class}},
-            "cpu": {{cluster.grafana_node.cpu}},
-            "memory": {{cluster.grafana_node.memory}},
+            "count": {{cluster.nodes.count}},
+            "instance_class": {{cluster.nodes.instance_class}},
+            "cpu": {{cluster.nodes.cpu}},
+            "memory": {{cluster.nodes.memory}},
             "volume": {
-                "size": {{cluster.grafana_node.volume_size}},
+                "size": {{cluster.nodes.volume_size}},
                 "mount_point": "/data",
                 "mount_options": "defaults,noatime",
                 "filesystem": "ext4"
@@ -100,6 +99,11 @@
         "admin_user": {{env.admin_user}},
         "admin_password": {{env.admin_password}},
         "prometheus_port": {{env.prometheus_port}},
-        "tsdb_retention": {{env.tsdb_retention}}
+        "tsdb_retention": {{env.tsdb_retention}},
+        "scrape_interval": {{env.scrape_interval}},
+        "scrape_timeout": {{env.scrape_timeout}},
+        "evaluation_interval": {{env.evaluation_interval}},
+        "external_labelname": {{env.external_labelname}},
+        "external_labelvalue": {{env.external_labelvalue}}
     }   
 }

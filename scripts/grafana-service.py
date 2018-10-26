@@ -39,6 +39,7 @@ SUPPORTED_ACTIONS = {
     "restart": "restart prometheus and grafana-server",
     "updateparam": "update parameters"
 }
+PROMETHEUS_GLOBAL = ['scrape_interval', 'scrape_timeout', 'evaluation_interval']
 MONITOR_VERSION_FILE = "/etc/monitor/version"
 MONITOR_CNF = "/etc/monitor/monitor.conf"
 IP_FILE = "/etc/monitor/ip"
@@ -395,30 +396,70 @@ def update_params(params, flock_path):
         time.sleep(3)
         
     change = 0
+    with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
+        if not locked.is_locked:
+            logger.error("update_params get lock failed")
+            return -1
+        with open(PROMETHEUS_CNF, "r") as docs:
+            try:
+                alldata = ruamel.yaml.round_trip_load(docs, preserve_quotes=True)
+            except ruamel.yaml.YAMLError as exc:
+                logger.error('update_params open prometheus.yml failed %s' % exc)
+                return -1
+        for name in PROMETHEUS_GLOBAL:
+            if is_prometheus_global_var_diff(params, alldata['global'], name):
+                change = 1
+        external_labels = {}
+        if params.has_key('external_labelname') and params.has_key('external_labelvalue'):
+            external_labels[params['external_labelname']] = SingleQuotedScalarString(params['external_labelvalue'])
+        else:
+            external_labels = None
+        if alldata['global']['external_labels'] != external_labels:
+            alldata['global']['external_labels'] = external_labels
+            change = 1
+        if change == 1:
+            logger.info("update_params need update prometheus.yml")
+            with open(PROMETHEUS_CNF, 'w+') as outfile:
+                try:
+                    ruamel.yaml.round_trip_dump(alldata, outfile, default_flow_style=False, allow_unicode=True, indent=4, block_seq_indent=2)
+                except ruamel.yaml.YAMLError as exc:
+                    logger.error('update_params write prometheus.yml failed %s' % exc)
+                    return -1
+
     if not os.path.exists(PROMETHEUS_SCRIPT):
-        change = 2
+        change = 3
     else:
         last_line = open(PROMETHEUS_SCRIPT).readlines()[-1]
         if last_line != '    --storage.tsdb.retention="%s"' % params["tsdb_retention"]:
-            change = 1
-        if not check_local_service("prometheus", params["prometheus_port"]):
             change = 2
+        if not check_local_service("prometheus", params["prometheus_port"]):
+            change = 3
     
     if change == 0:
         logger.info("update_params prometheus neednot update")
         return 0
-    generate_script(params, flock_path)
+    if change > 1 :
+        logger.info("update_params need update run_prometheus.sh")
+        generate_script(params, flock_path)
     ret_code, _ = exec_cmd('service prometheus restart')
     if ret_code != 0:
         logger.error('update_params restart service prometheus failed')
         return -1
-    if change == 2:
+    if change == 3:
+        logger.info("update_params need update datasources")
         res = update_datasources(params)
         if res != 0:
             logger.error('update_params update_datasources failed')
             return -1
     logger.info("update_params succeeded")
     return 0
+
+def is_prometheus_global_var_diff(params, vars, name):
+    if vars[name] == params[name]:
+        return False
+    else:
+        vars[name] = params[name]
+        return True
 
 def generate_cnf(params, flock_path):
     logger.info("generate_cnf")

@@ -11,7 +11,7 @@
                     "label": "Name",
                     "description": "",
                     "type": "string",
-                    "default": "Grafana Service",
+                    "default": "Prometheus",
                     "required": "no"
                 },
                 {
@@ -31,9 +31,9 @@
                     "required": "yes"
                 },
                 {
-                    "key": "grafana_node",
-                    "label": "Grafana Node",
-                    "description": "",
+                    "key": "nodes",
+                    "label": "Nodes",
+                    "description": "Node properties",
                     "type": "array",
                     "properties": [
                         {
@@ -129,6 +129,7 @@
                     "label": "Port",
                     "description": "targets in prometheus.yml, for example: 13308",
                     "type": "integer",
+                    "min": 0,
                     "max": 65535,
                     "required": "yes"
                 },
@@ -160,7 +161,7 @@
                     "label": "Grafana_port",
                     "description": "The grafana's http port to use.",
                     "type": "integer",
-                    "min": 3000,
+                    "min": 0,
                     "max": 65535,
                     "default": 3000,
                     "required": "no"
@@ -172,7 +173,7 @@
                     "type": "string",
                     "default": "admin",
                     "changeable": false,
-                    "pattern": "^\\w{1,30}$",
+                    "pattern": "^\\w{3,30}$",
                     "required": "no"
                 }, 
                 {
@@ -190,7 +191,7 @@
                     "label": "Prometheus_port",
                     "description": "The prometheus's http port to use.",
                     "type": "integer",
-                    "min": 9090,
+                    "min": 0,
                     "max": 65535,
                     "default": 9090,
                     "required": "no"
@@ -201,7 +202,51 @@
                     "description": "This determines when to remove old data. Defaults to 15d.",
                     "type": "string",
                     "default": "15d",
-                    "pattern": "^[1-9]\\d*(d|h|m|s)$",
+                    "pattern": "[0-9]+(ms|[smhdwy])",
+                    "required": "no"
+                }, 
+                {
+                    "key": "scrape_interval",
+                    "label": "scrape_interval",
+                    "description": "How frequently to scrape targets by default. A global configuration, defaults to 1m.",
+                    "type": "string",
+                    "default": "1m",
+                    "pattern": "[0-9]+(ms|[smhdwy])",
+                    "required": "no"
+                }, 
+                {
+                    "key": "scrape_timeout",
+                    "label": "scrape_timeout",
+                    "description": "How long until a scrape request times out. A global configuration, defaults to 10s.",
+                    "type": "string",
+                    "default": "10s",
+                    "pattern": "[0-9]+(ms|[smhdwy])",
+                    "required": "no"
+                }, 
+                {
+                    "key": "evaluation_interval",
+                    "label": "evaluation_interval",
+                    "description": "How frequently to evaluate rules. A global configuration, defaults to 1m.",
+                    "type": "string",
+                    "default": "1m",
+                    "pattern": "[0-9]+(ms|[smhdwy])",
+                    "required": "no"
+                }, 
+                {
+                    "key": "external_labelname",
+                    "label": "labelname",
+                    "description": "The labels to add to any time series or alerts when communicating with external systems.",
+                    "type": "string",
+                    "default": "",
+                    "pattern": "(^$)|([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "required": "no"
+                }, 
+                {
+                    "key": "external_labelvalue",
+                    "label": "labelvalue",
+                    "description": "",
+                    "type": "string",
+                    "default": "",
                     "required": "no"
                 }
             ]
