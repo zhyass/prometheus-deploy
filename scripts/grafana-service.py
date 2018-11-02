@@ -37,9 +37,12 @@ SUPPORTED_ACTIONS = {
     "start": "start prometheus and grafana-server",
     "stop": "stop prometheus and grafana-server",
     "restart": "restart prometheus and grafana-server",
-    "updateparam": "update parameters"
+    "updateparam": "update parameters",
+    "startalertmanager": "start alertmanager",
+    "stopalertmanager": "stop alertmanager"
 }
 PROMETHEUS_GLOBAL = ['scrape_interval', 'scrape_timeout', 'evaluation_interval']
+PROMETHEUS_VARS = ['scrape_interval', 'scrape_timeout', 'metrics_path', 'scheme']
 MONITOR_VERSION_FILE = "/etc/monitor/version"
 MONITOR_CNF = "/etc/monitor/monitor.conf"
 IP_FILE = "/etc/monitor/ip"
@@ -49,6 +52,7 @@ PROMETHEUS_SCRIPT = "/opt/prometheus/scripts/run_prometheus.sh"
 DATASOURCE_FILE = "/opt/grafana/datasources/data_source.json"
 LOCK_TIMEOUT = 300
 GRAFANA_PWD = "/etc/monitor/grafana.pwd"
+
 
 def load_params():
     ret = wait_conf_file_ready(MONITOR_CNF)
@@ -85,6 +89,7 @@ def load_params():
     logger.info("load params:%s",params)
     return params
 
+
 def add_job(job_cnf,flock_path):
     logger.info("add_job")
 
@@ -94,7 +99,8 @@ def add_job(job_cnf,flock_path):
     job_name = job_cnf.get("job_name", "").strip()
     ip = job_cnf.get("ip", "").strip()
     port = job_cnf.get("port", "")
-    instance = job_cnf.get("instance", "").strip()
+    labelname = job_cnf.get("labelname", "").strip()
+    labelvalue = job_cnf.get("labelvalue", "").strip()
 
     with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
         if not locked.is_locked:
@@ -107,19 +113,26 @@ def add_job(job_cnf,flock_path):
                 logger.error('add_job open prometheus.yml failed %s' % exc)
                 return -1
         static_configs = {}
-        if instance != "":
-            labels = {}
-            labels['instance'] = SingleQuotedScalarString(instance)
+        labels = {}
+        if labelname != "" and labelvalue != "":
+            labels[labelname] = SingleQuotedScalarString(labelvalue)
             static_configs['labels'] = labels
-        targets = [SingleQuotedScalarString(ip + ":" + str(port))]
-        static_configs['targets'] = targets
+        target = SingleQuotedScalarString(ip + ":" + str(port))
+        static_configs['targets'] = [target]
 
         find = False
         if alldata['scrape_configs'] is not None:
             for i in alldata['scrape_configs']:
                 if job_name == i['job_name']:
-                    i['static_configs'].append(static_configs)
-                    find = True
+                    for j in i['static_configs']:
+                        if j.has_key('labels') and labels != {} and j['labels'] == labels:
+                            find = True
+                            j['targets'].append(target)
+                            j['targets'] = list(set(j['targets']))
+                            break
+                    if not find:
+                        i['static_configs'].append(static_configs)
+                        find = True
                     break
         else:
             alldata['scrape_configs'] = []
@@ -127,6 +140,12 @@ def add_job(job_cnf,flock_path):
             scrape_configs = {}
             scrape_configs['static_configs'] = [static_configs]
             scrape_configs['job_name'] = SingleQuotedScalarString(job_name)
+            for name in PROMETHEUS_VARS:
+                param = job_cnf.get(name, "").strip()
+                if param != "":
+                    scrape_configs[name] = SingleQuotedScalarString(param)
+            if job_cnf.get("honor_labels").lower() == 'true':
+                scrape_configs['honor_labels'] = True
             alldata['scrape_configs'].append(scrape_configs)
 
         with open(PROMETHEUS_CNF, 'w+') as outfile:
@@ -136,12 +155,14 @@ def add_job(job_cnf,flock_path):
                 logger.error('add_job write prometheus.yml failed %s' % exc)
                 return -1
 
-    ret_code, _ = exec_cmd('service prometheus restart')
-    if ret_code != 0:
-        logger.error('del_job restart service prometheus failed')
+    url = '/-/reload'
+    res, _ = http_request(params["local_ip"], int(params["prometheus_port"]), "POST", url, None, headers={})
+    if res != 0:
+        logger.error('add_job reload prometheus.yml failed')
         return -1
     logger.info("add_job succeeded")
     return 0
+
 
 def del_job(job_cnf):
     logger.info("del_job")
@@ -151,7 +172,9 @@ def del_job(job_cnf):
         return -1
 
     job_name = job_cnf.get("job_name","").strip()
-    instance = job_cnf.get("instance","").strip()
+    ip = job_cnf.get("ip", "").strip()
+    port = job_cnf.get("port", "")
+    target = ip + ":" + str(port)
 
     with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
         if not locked.is_locked:
@@ -167,23 +190,24 @@ def del_job(job_cnf):
         find = False
         for i in alldata['scrape_configs']:
             if job_name == i['job_name']:
-                if  instance == "":
-                    find = True
-                    alldata['scrape_configs'].remove(i)
-                else:
-                    for j in i['static_configs']:
-                        if j.has_key('labels') and j['labels'].has_key('instance'):
-                            if instance == j['labels']['instance']:
-                                find = True
+                for j in i['static_configs']:
+                    for k in j['targets']:
+                        if k == target:
+                            find = True
+                            if len(j['targets']) == 1:
                                 if len(i['static_configs']) == 1:
                                     alldata['scrape_configs'].remove(i)
                                 else:
                                     i['static_configs'].remove(j)
-                                break
+                            else:
+                                j['targets'].remove(k)
+                            break
+                    if find:
+                        break
                 break
         
         if not find:
-            logger.error('del_job failed, cannot find job_name:%s, instance:%s', job_name, instance)
+            logger.error('del_job failed, cannot find job_name:%s, target:%s', job_name, target)
             return -1
 
         if len(alldata['scrape_configs']) == 0:
@@ -195,13 +219,15 @@ def del_job(job_cnf):
                 logger.error('del_job write prometheus.yml failed %s' % exc)
                 return -1
 
-    ret_code, _ = exec_cmd('service prometheus restart')
-    if ret_code != 0:
-        logger.error('del_job restart service prometheus failed')
+    url = '/-/reload'
+    res, _ = http_request(params["local_ip"], int(params["prometheus_port"]), "POST", url, None, headers={})
+    if res != 0:
+        logger.error('del_job reload prometheus.yml failed')
         return -1
 
     logger.info("del_job succeeded")
     return 0
+
 
 def reset_admin(params, passwd):
     logger.info("reset_admin.")
@@ -232,36 +258,39 @@ def reset_admin(params, passwd):
     logger.info("reset_admin succeeded.")
     return 0
 
-def disp_list():
+
+def disp_list(params):
     logger.info("disp_list")
 
-    fd = open(PROMETHEUS_CNF, 'r')
-    dict_tmp = yaml.load(fd)
-    fd.close()
+    url = '/api/v1/targets'
+    headers = {"Content-Type": "application/json"}
+    res, data = http_request(params["local_ip"], int(params["prometheus_port"]), "GET", url, None, headers)
+    if res != 0:
+        logger.error("disp_list fail")
+        return -1
+
+    body = json.loads(data)
 
     l = []
-    for i in dict_tmp['scrape_configs']:
-        job_name = i['job_name']
-        for j in i['static_configs']:
-            instance = ""
-            if j.has_key('labels'):
-                if j['labels'].has_key('instance'):
-                    instance = j['labels']['instance']
-            for k in j['targets']:
-                lst = k.split(":")
-                if len(lst) != 2:
-                    logger.error("disp_list failed, unsyntax err for 'prometheus.yml'")
-                    return -1
-                l.append([job_name, lst[0], lst[1], instance])
+    for i in body['data']['activeTargets']:
+        job_name = i['labels']['job']
+        scrapeUrl = i['scrapeUrl']
+        instance = i['labels']['instance']
+        health = i['health']
+        group = ""
+        if i['labels'].has_key('group'):
+            group = i['labels']['group']
+        l.append([job_name, scrapeUrl, instance, health, group])
 
     ret_cnf = {
-        "labels": ["job_name", "ip", "port", "instance"],
+        "labels": ["job_name", "scrapeUrl", "instance", "health", "group"],
         "data": l
     }
     print json.dumps(ret_cnf)
 
     logger.info("disp_list succeeded")
     return 0
+
 
 def disp_dashboard():
     logger.info("disp_dashboard")
@@ -281,6 +310,7 @@ def disp_dashboard():
     logger.info("disp_dashboard succeeded")
     return 0
 
+
 def health_check(params):
     logger.info("health_check")
     bflag = False
@@ -299,6 +329,7 @@ def health_check(params):
 
     logger.info("health_check succeeded")
     return 0,""
+
 
 def health_action(params):
     logger.info("health_action")
@@ -321,6 +352,7 @@ def health_action(params):
     logger.info("health_action succeeded")
     return 0
 
+
 def stop_server(params):
     logger.info("stop_server")
 
@@ -342,6 +374,7 @@ def stop_server(params):
 
     logger.info("stop_server succeeded")
     return 0
+
 
 def start_server(params, flock_path):
     logger.info("start_server")
@@ -371,6 +404,7 @@ def start_server(params, flock_path):
     logger.info("start_server succeeded")
     return 0
 
+
 def restart_server(params, flock_path):
     logger.info("restart_server")
     stop_server(params)
@@ -379,6 +413,7 @@ def restart_server(params, flock_path):
         return -1
     logger.info("restart_server succeeded")
     return 0
+
 
 def update_params(params, flock_path):
     logger.info("update_params")
@@ -406,6 +441,7 @@ def update_params(params, flock_path):
             except ruamel.yaml.YAMLError as exc:
                 logger.error('update_params open prometheus.yml failed %s' % exc)
                 return -1
+    
         for name in PROMETHEUS_GLOBAL:
             if is_prometheus_global_var_diff(params, alldata['global'], name):
                 change = 1
@@ -438,21 +474,30 @@ def update_params(params, flock_path):
     if change == 0:
         logger.info("update_params prometheus neednot update")
         return 0
-    if change > 1 :
-        logger.info("update_params need update run_prometheus.sh")
-        generate_script(params, flock_path)
-    ret_code, _ = exec_cmd('service prometheus restart')
-    if ret_code != 0:
-        logger.error('update_params restart service prometheus failed')
-        return -1
+    if change == 1:
+        url = '/-/reload'
+        res_node, _ = http_request(params["local_ip"], int(params["prometheus_port"]), "POST", url, None, headers={})
+        if res_node != 0:
+            logger.error('update_params reload prometheus.yml failed')
+            return -1
+        logger.info("update_params reload prometheus config succeeded")
+        return 0
     if change == 3:
         logger.info("update_params need update datasources")
         res = update_datasources(params)
         if res != 0:
             logger.error('update_params update_datasources failed')
             return -1
+
+    logger.info("update_params need update run_prometheus.sh")
+    generate_script(params, flock_path)
+    ret_code, _ = exec_cmd('service prometheus restart')
+    if ret_code != 0:
+        logger.error('update_params restart service prometheus failed')
+        return -1
     logger.info("update_params succeeded")
     return 0
+
 
 def is_prometheus_global_var_diff(params, vars, name):
     if vars[name] == params[name]:
@@ -488,6 +533,7 @@ def generate_cnf(params, flock_path):
     logger.info("generate_cnf succeeded")
     return 0
 
+
 def generate_script(params, flock_path):
     logger.info("generate_script")
     with FileLock(flock_path, LOCK_TIMEOUT, stealing=True) as locked:
@@ -506,6 +552,7 @@ exec bin/prometheus \\
     --web.listen-address=":%s" \\
     --web.external-url="http://%s:%s/" \\
     --web.enable-admin-api \\
+    --web.enable-lifecycle \\
     --log.level="info" \\
     --storage.tsdb.path="/data/prometheus/data" \\
     --storage.tsdb.retention="%s"''' % (PROMETHEUS_CNF, params["prometheus_port"], params["local_ip"], params["prometheus_port"], params["tsdb_retention"])
@@ -516,6 +563,7 @@ exec bin/prometheus \\
         exec_cmd('chmod +x %s' % PROMETHEUS_SCRIPT)
     logger.info("generate_script succeeded")
     return 0
+
 
 def import_datasources(params):
     logger.info("import_datasources")
@@ -545,6 +593,7 @@ def import_datasources(params):
 
     logger.info("import_datasources succeeded")
     return 0
+
 
 def update_datasources(params):
     logger.info("update_datasources")
@@ -579,6 +628,30 @@ def update_datasources(params):
     logger.info("update_datasources succeeded")
     return 0
 
+def start_alertmanager():
+    logger.info("start_alertmanager")
+
+    if check_local_service("alertmanager", 9093):
+        logger.warning("start_alertmanager skipped")
+    else:
+        ret_code, output = exec_cmd('service alertmanager start')
+        if ret_code != 0:
+            logger.error('start_alertmanager failed, reason %s' % output)
+            return -1
+    logger.info("start_alertmanager succeeded")
+    return 0
+
+def stop_alertmanager():
+    logger.info("stop_alertmanager")
+
+    if check_local_service("alertmanager", 9093):
+        ret_code, output = exec_cmd('service alertmanager stop')
+        if ret_code != 0:
+            logger.error('stop_alertmanager failed, reason %s' % output)
+            return -1
+    logger.info("stop_alertmanager succeeded")
+    return 0
+
 def print_usage():
     print "usage:\n"
     #new_actions = sorted(SUPPORTED_ACTIONS.items(), lambda x, y: cmp(x[0], y[0]))
@@ -586,6 +659,7 @@ def print_usage():
     for key, val in SUPPORTED_ACTIONS.iteritems():
         print "    %-20s    %s" % (key, val)
     print "\n"
+
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
@@ -610,7 +684,7 @@ if __name__ == "__main__":
     ret = 0
     try:
         if action == "displayjobs":
-            ret = disp_list()
+            ret = disp_list(params)
         elif action == "addjob":
             job_cnf = get_json_params(sys.argv[2:])
             ret = add_job(job_cnf,flock_path)
@@ -634,6 +708,10 @@ if __name__ == "__main__":
             ret = restart_server(params, flock_path)
         elif action == "updateparam":
             ret = update_params(params, flock_path)
+        elif action == "startalertmanager":
+            ret = start_alertmanager()
+        elif action == "stopalertmanager":
+            ret = stop_alertmanager()
         exit(ret)
     except Exception, e:
         logger.error("%s" % traceback.format_exc())

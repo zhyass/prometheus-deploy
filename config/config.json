@@ -108,10 +108,19 @@
             "key": "service_params",
             "description": "Custom service configuration properties",
             "type": "array",
-            "properties": [
+            "properties": [ 
+                {
+                    "key": "newpasswd",
+                    "label": "newPassword",
+                    "description": "Reset the grafana's admin password.",
+                    "type": "password",
+                    "pattern": "^.{5,30}$",
+                    "default": "admin",
+                    "required": "yes"
+                },
                 {
                     "key": "job_name",
-                    "label": "JobName",
+                    "label": "job_name",
                     "description": "job name in prometheus.yml",
                     "type": "string",
                     "required": "yes"
@@ -134,24 +143,79 @@
                     "required": "yes"
                 },
                 {
-                    "key": "instance",
-                    "label": "Instance",
-                    "description": "instance label in prometheus.yml",
+                    "key": "honor_labels",
+                    "label": "honor_labels",
+                    "description": "true: keep label values from the scraped data and ignoring the conflicting server-side labels, false: renaming conflicting labels.",
                     "type": "string",
-                    "default": "",
+                    "default": "false",
+                    "range": [
+                        "false",
+                        "true"
+                    ],
                     "required": "no"
                 },
                 {
-                    "key": "newpasswd",
-                    "label": "newPassword",
-                    "description": "Reset the grafana's admin password.",
-                    "type": "password",
-                    "pattern": "^.{5,30}$",
-                    "default": "admin",
-                    "required": "yes"
+                    "key": "labelname",
+                    "label": "labelname",
+                    "description": "labels in prometheus.yml",
+                    "type": "string",
+                    "default": "",
+                    "range": [
+                        "",
+                        "instance",
+                        "group"
+                    ],
+                    "required": "no"
+                },
+                {
+                    "key": "labelvalue",
+                    "label": "labelvalue",
+                    "description": "",
+                    "type": "string",
+                    "default": "",
+                    "required": "no"
+                }, 
+                {
+                    "key": "metrics_path",
+                    "label": "metrics_path",
+                    "description": "The HTTP resource path on which to fetch metrics from targets.",
+                    "type": "string",
+                    "default": "/metrics",
+                    "required": "no"
+                }, 
+                {
+                    "key": "scheme",
+                    "label": "scheme",
+                    "description": "Configures the protocol scheme used for requests.",
+                    "type": "string",
+                    "default": "http",
+                    "range": [
+                        "http",
+                        "https"
+                    ],
+                    "required": "no"
+                }, 
+                {
+                    "key": "scrape_interval",
+                    "label": "scrape_interval",
+                    "description": "How frequently to scrape targets.",
+                    "type": "string",
+                    "default": "",
+                    "pattern": "(^$)|([0-9]+(ms|[smhdwy]))",
+                    "required": "no"
+                }, 
+                {
+                    "key": "scrape_timeout",
+                    "label": "scrape_timeout",
+                    "description": "How long until a scrape request times out.",
+                    "type": "string",
+                    "default": "",
+                    "pattern": "(^$)|([0-9]+(ms|[smhdwy]))",
+                    "required": "no"
                 }
             ]
-        }, {
+        }, 
+        {
             "key": "env",
             "description": "Application configuration properties",
             "type": "array",

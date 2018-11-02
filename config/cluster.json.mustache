@@ -17,9 +17,9 @@
     "nodes": [
         {
             "container": {
-                "type": "lxc",
+                "type": "kvm",
                 "zone": "gd2a",
-                "image": "img-mmgceug5"
+                "image": "img-hxv0yxtc"
             },
             "count": {{cluster.nodes.count}},
             "instance_class": {{cluster.nodes.instance_class}},
@@ -32,6 +32,7 @@
                 "filesystem": "ext4"
             },
             "vertical_scaling_policy": "sequential",
+            "user_access": true,
             "services": {
                 "start": {
                     "cmd": "/etc/init.d/grafana-service start"
@@ -58,7 +59,13 @@
                         "job_name": {{service_params.job_name}},
                         "ip":{{service_params.ip}},
                         "port":{{service_params.port}},
-                        "instance":{{service_params.instance}}
+                        "labelname":{{service_params.labelname}},
+                        "labelvalue":{{service_params.labelvalue}},
+                        "honor_labels": {{service_params.honor_labels}},
+                        "scrape_interval": {{service_params.scrape_interval}},
+                        "scrape_timeout": {{service_params.scrape_timeout}},
+                        "metrics_path": {{service_params.metrics_path}},
+                        "scheme": {{service_params.scheme}}
                     }
                 },
                 "del_job": {
@@ -67,8 +74,19 @@
                     "timeout": 60,
                     "service_params": {
                         "job_name": {{service_params.job_name}},
-                        "instance":{{service_params.instance}}
+                        "ip":{{service_params.ip}},
+                        "port":{{service_params.port}}
                     }
+                },
+                "start_alertmanager": {
+                    "type": "custom",
+                    "cmd": "/etc/init.d/grafana-service startalertmanager",
+                    "timeout": 60
+                },
+                "stop_alertmanager": {
+                    "type": "custom",
+                    "cmd": "/etc/init.d/grafana-service stopalertmanager",
+                    "timeout": 60
                 }
             }
         } 
